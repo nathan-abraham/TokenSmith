@@ -21,6 +21,7 @@ from src.embedder import CachedEmbedder
 
 from src.config import RAGConfig
 from src.index_builder import preprocess_for_bm25
+from src.bptree import load_all_metadata
 
 
 # -------------------------- Embedder cache ------------------------------
@@ -36,19 +37,30 @@ def _get_embedder(model_name: str) -> CachedEmbedder:
 
 # -------------------------- Read artifacts -------------------------------
 
-def load_artifacts(artifacts_dir: os.PathLike, index_prefix: str) -> Tuple[faiss.Index, List[str], List[str], Any]:
+def load_artifacts(
+    artifacts_dir: os.PathLike,
+    index_prefix: str,
+    bptree_path: Optional[str] = None,
+) -> Tuple[faiss.Index, List[str], List[str], Any]:
     """
-    Loads:
-      - FAISS index: {index_prefix}.faiss
-      - chunks:      {index_prefix}_chunks.pkl
-      - sources:     {index_prefix}_sources.pkl
+    Load FAISS, BM25, chunks, sources, and chunk metadata.
+
+    When *bptree_path* points to an existing B+ tree index file the metadata
+    is loaded from disk via a full leaf-chain scan instead of from the
+    pickle file, replacing the pickle-based storage with the B+ tree.
+    Falls back to the pickle file if the B+ tree is absent.
     """
     artifacts_dir = pathlib.Path(artifacts_dir)
-    faiss_index = faiss.read_index(str(artifacts_dir / f"{index_prefix}.faiss"))
-    bm25_index  = pickle.load(open(artifacts_dir / f"{index_prefix}_bm25.pkl", "rb"))
-    chunks      = pickle.load(open(artifacts_dir / f"{index_prefix}_chunks.pkl", "rb"))
-    sources     = pickle.load(open(artifacts_dir / f"{index_prefix}_sources.pkl", "rb"))
-    metadata = pickle.load(open(artifacts_dir / f"{index_prefix}_meta.pkl", "rb"))
+    faiss_index   = faiss.read_index(str(artifacts_dir / f"{index_prefix}.faiss"))
+    bm25_index    = pickle.load(open(artifacts_dir / f"{index_prefix}_bm25.pkl", "rb"))
+    chunks        = pickle.load(open(artifacts_dir / f"{index_prefix}_chunks.pkl", "rb"))
+    sources       = pickle.load(open(artifacts_dir / f"{index_prefix}_sources.pkl", "rb"))
+
+    if bptree_path and os.path.exists(bptree_path):
+        print(f"Loading metadata from B+ tree index: {bptree_path}")
+        metadata = load_all_metadata(bptree_path)
+    else:
+        metadata = pickle.load(open(artifacts_dir / f"{index_prefix}_meta.pkl", "rb"))
 
     return faiss_index, bm25_index, chunks, sources, metadata
 

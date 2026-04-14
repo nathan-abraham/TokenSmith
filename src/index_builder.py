@@ -12,7 +12,7 @@ import pickle
 import pathlib
 import re
 import json
-from typing import List, Dict
+from typing import List, Dict, Optional
 
 import faiss
 from rank_bm25 import BM25Okapi
@@ -20,6 +20,7 @@ from src.embedder import SentenceTransformer
 
 from src.preprocessing.chunking import DocumentChunker, ChunkConfig
 from src.preprocessing.extraction import extract_sections_from_markdown
+from src.bptree import build_metadata_index
 
 # ----- runtime parallelism knobs (avoid oversubscription) -----
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -43,7 +44,8 @@ def build_index(
     artifacts_dir: os.PathLike,
     index_prefix: str,
     use_multiprocessing: bool = False,
-    use_headings: bool = False
+    use_headings: bool = False,
+    bptree_path: Optional[str] = None,
 ) -> None:
     """
     Extract sections, chunk, embed, and build both FAISS and BM25 indexes.
@@ -225,6 +227,12 @@ def build_index(
     with open(artifacts_dir / f"{index_prefix}_meta.pkl", "wb") as f:
         pickle.dump(metadata, f)
     print(f"Saved all index artifacts with prefix: {index_prefix}")
+
+    # Step 6: Build B+ tree metadata index (replaces pickle-based metadata storage)
+    if bptree_path is not None:
+        print(f"Building B+ tree metadata index ({len(metadata):,} records) ...")
+        build_metadata_index(metadata, bptree_path)
+        print(f"B+ tree index saved: {bptree_path}")
 
 # ------------------------ Helper functions ------------------------------
 

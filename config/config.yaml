@@ -1,4 +1,4 @@
-embed_model: "models/Qwen3-Embedding-4B-Q5_K_M.gguf"
+embed_model: "models/Qwen3-Embedding-4B-Q4_K_M.gguf"
 top_k: 10
 num_candidates: 50
 ensemble_method: "rrf"
@@ -6,7 +6,7 @@ ranker_weights: {"faiss":1,"bm25":0,"index_keywords":0}
 rrf_k: 60
 max_gen_tokens: 400
 chunk_mode : "recursive_sections"
-gen_model: "models/qwen2.5-3b-instruct-q8_0.gguf"
+gen_model: "models/qwen2.5-1.5b-instruct-q5_k_m.gguf"
 chunk_size: 2000
 chunk_overlap: 200
 use_hyde: false
@@ -18,3 +18,5 @@ use_double_prompt: false
 enable_history: true
 max_history_turns: 3
 enable_topic_extraction: true
+use_bptree: true
+bptree_index_path: "index/bptree/metadata.db"

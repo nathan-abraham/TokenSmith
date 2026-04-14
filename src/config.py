@@ -54,6 +54,10 @@ class RAGConfig:
     extracted_index_path: os.PathLike = "data/extracted_index.json"
     page_to_chunk_map_path: os.PathLike = "index/sections/textbook_index_page_to_chunk_map.json"
 
+    # B+ tree metadata index (75% goal)
+    use_bptree: bool = False
+    bptree_index_path: str = "index/bptree/metadata.db"
+
     # user feedback modeling
     enable_topic_extraction: bool = False
 
