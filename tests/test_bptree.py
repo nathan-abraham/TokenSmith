@@ -11,7 +11,16 @@ import tempfile
 
 import pytest
 
-from src.bptree import BPlusTree, build_metadata_index, load_all_metadata, lookup_metadata
+from src.bptree import (
+    BPlusTree,
+    build_metadata_index,
+    build_secondary_indexes,
+    load_all_metadata,
+    lookup_metadata,
+    range_scan_chapter,
+    range_scan_pages,
+)
+from src.query_filter import extract_constraints, get_chunk_allowlist
 from src.bptree.page import (
     PAGE_SIZE,
     HEADER_SIZE,
@@ -304,3 +313,220 @@ class TestIndexStore:
             result = lookup_metadata(path, i)
             assert result is not None
             assert result["chunk_id"] == i
+
+
+# ── range scan ────────────────────────────────────────────────────────────────
+
+class TestRangeScan:
+
+    def test_range_scan_empty_tree(self, tmp_db):
+        with BPlusTree(tmp_db) as tree:
+            assert tree.range_scan(0, 100) == []
+
+    def test_range_scan_single_match(self, tmp_db):
+        with BPlusTree(tmp_db) as tree:
+            tree.insert(5, _make_meta(5))
+            tree.insert(10, _make_meta(10))
+            tree.insert(15, _make_meta(15))
+            result = tree.range_scan(10, 10)
+        assert len(result) == 1
+        assert result[0][0] == 10
+
+    def test_range_scan_inclusive_bounds(self, tmp_db):
+        ids = [1, 2, 3, 4, 5]
+        with BPlusTree(tmp_db) as tree:
+            for i in ids:
+                tree.insert(i, _make_meta(i))
+            result = tree.range_scan(2, 4)
+        assert [k for k, _ in result] == [2, 3, 4]
+
+    def test_range_scan_beyond_tree(self, tmp_db):
+        with BPlusTree(tmp_db) as tree:
+            for i in range(5):
+                tree.insert(i, _make_meta(i))
+            result = tree.range_scan(10, 20)
+        assert result == []
+
+    def test_range_scan_full_tree(self, tmp_db):
+        n = 50
+        with BPlusTree(tmp_db) as tree:
+            for i in range(n):
+                tree.insert(i, _make_meta(i))
+            result = tree.range_scan(0, n - 1)
+        assert [k for k, _ in result] == list(range(n))
+
+    def test_range_scan_across_leaf_boundary(self, tmp_db):
+        """Range scan must follow next_id pointers across leaf-page boundaries."""
+        n = 100
+        with BPlusTree(tmp_db) as tree:
+            for i in range(n):
+                tree.insert(i, _make_meta(i))
+            result = tree.range_scan(10, 89)
+        assert [k for k, _ in result] == list(range(10, 90))
+
+    def test_range_scan_values_correct(self, tmp_db):
+        metas = {i: _make_meta(i) for i in range(20)}
+        with BPlusTree(tmp_db) as tree:
+            for i, m in metas.items():
+                tree.insert(i, m)
+            result = tree.range_scan(5, 10)
+        for k, v in result:
+            assert v == metas[k]
+
+
+# ── secondary indexes ─────────────────────────────────────────────────────────
+
+def _make_meta_with_location(chunk_id: int, pages: list, chapter: int) -> dict:
+    section_path = f"Chapter {chapter} Section {chapter}.1 Sample Section"
+    return {
+        "chunk_id":     chunk_id,
+        "filename":     "data/test.md",
+        "section":      f"Section {chunk_id}",
+        "section_path": section_path,
+        "char_len":     500,
+        "word_len":     80,
+        "text_preview": f"Preview {chunk_id}",
+        "page_numbers": pages,
+    }
+
+
+class TestSecondaryIndexes:
+
+    def _build_all(self, tmp_path, metas):
+        meta_path    = str(tmp_path / "meta.db")
+        page_path    = str(tmp_path / "idx_page.db")
+        chapter_path = str(tmp_path / "idx_chapter.db")
+        build_metadata_index(metas, meta_path)
+        build_secondary_indexes(metas, page_path, chapter_path)
+        return meta_path, page_path, chapter_path
+
+    def test_page_index_exact_page(self, tmp_path):
+        metas = [
+            _make_meta_with_location(0, [10, 11], 1),
+            _make_meta_with_location(1, [11, 12], 1),
+            _make_meta_with_location(2, [20, 21], 2),
+        ]
+        _, page_path, chapter_path = self._build_all(tmp_path, metas)
+        result = range_scan_pages(page_path, 11, 11)
+        assert result == {0, 1}
+
+    def test_page_index_range(self, tmp_path):
+        metas = [
+            _make_meta_with_location(0, [10, 11], 1),
+            _make_meta_with_location(1, [15, 16], 1),
+            _make_meta_with_location(2, [20, 21], 2),
+        ]
+        _, page_path, chapter_path = self._build_all(tmp_path, metas)
+        result = range_scan_pages(page_path, 10, 16)
+        assert result == {0, 1}
+
+    def test_page_index_no_match(self, tmp_path):
+        metas = [_make_meta_with_location(0, [5, 6], 1)]
+        _, page_path, chapter_path = self._build_all(tmp_path, metas)
+        assert range_scan_pages(page_path, 100, 200) == set()
+
+    def test_chapter_index_exact(self, tmp_path):
+        metas = [
+            _make_meta_with_location(0, [1, 2], 1),
+            _make_meta_with_location(1, [3, 4], 1),
+            _make_meta_with_location(2, [10, 11], 2),
+        ]
+        _, page_path, chapter_path = self._build_all(tmp_path, metas)
+        assert range_scan_chapter(chapter_path, 1) == {0, 1}
+        assert range_scan_chapter(chapter_path, 2) == {2}
+
+    def test_chapter_index_no_match(self, tmp_path):
+        metas = [_make_meta_with_location(0, [1], 1)]
+        _, page_path, chapter_path = self._build_all(tmp_path, metas)
+        assert range_scan_chapter(chapter_path, 99) == set()
+
+    def test_secondary_indexes_overwrite(self, tmp_path):
+        """Re-building secondary indexes should discard old data."""
+        page_path    = str(tmp_path / "idx_page.db")
+        chapter_path = str(tmp_path / "idx_chapter.db")
+        build_secondary_indexes([_make_meta_with_location(0, [1], 1)], page_path, chapter_path)
+        build_secondary_indexes([_make_meta_with_location(99, [50], 5)], page_path, chapter_path)
+        assert range_scan_pages(page_path, 1, 1) == set()
+        assert range_scan_pages(page_path, 50, 50) == {99}
+
+
+# ── query constraint extractor ────────────────────────────────────────────────
+
+class TestQueryFilter:
+
+    def test_no_constraints(self):
+        assert extract_constraints("What is memory management?") == {}
+
+    def test_single_page(self):
+        c = extract_constraints("What is discussed on page 42?")
+        assert c["pages"] == (42, 42)
+
+    def test_page_range_hyphen(self):
+        c = extract_constraints("Summarize pages 10-20")
+        assert c["pages"] == (10, 20)
+
+    def test_page_range_to(self):
+        c = extract_constraints("What happens on pages 5 to 15?")
+        assert c["pages"] == (5, 15)
+
+    def test_page_range_through(self):
+        c = extract_constraints("Explain pages 30 through 40")
+        assert c["pages"] == (30, 40)
+
+    def test_page_range_em_dash(self):
+        c = extract_constraints("pages 10–20")
+        assert c["pages"] == (10, 20)
+
+    def test_chapter_only(self):
+        c = extract_constraints("Summarize Chapter 3")
+        assert c["chapter"] == 3
+
+    def test_chapter_case_insensitive(self):
+        c = extract_constraints("what is in CHAPTER 7?")
+        assert c["chapter"] == 7
+
+    def test_page_and_chapter(self):
+        c = extract_constraints("What is on page 42 in chapter 3?")
+        assert c["pages"] == (42, 42)
+        assert c["chapter"] == 3
+
+    def test_get_allowlist_no_constraints(self, tmp_path):
+        page_path    = str(tmp_path / "idx_page.db")
+        chapter_path = str(tmp_path / "idx_chapter.db")
+        assert get_chunk_allowlist("plain question", page_path, chapter_path) is None
+
+    def test_get_allowlist_page_filter(self, tmp_path):
+        metas = [
+            _make_meta_with_location(0, [10, 11], 1),
+            _make_meta_with_location(1, [20, 21], 2),
+        ]
+        page_path    = str(tmp_path / "idx_page.db")
+        chapter_path = str(tmp_path / "idx_chapter.db")
+        build_secondary_indexes(metas, page_path, chapter_path)
+        result = get_chunk_allowlist("What is on pages 10-11?", page_path, chapter_path)
+        assert result == {0}
+
+    def test_get_allowlist_chapter_filter(self, tmp_path):
+        metas = [
+            _make_meta_with_location(0, [1, 2], 1),
+            _make_meta_with_location(1, [3, 4], 2),
+        ]
+        page_path    = str(tmp_path / "idx_page.db")
+        chapter_path = str(tmp_path / "idx_chapter.db")
+        build_secondary_indexes(metas, page_path, chapter_path)
+        result = get_chunk_allowlist("Summarize Chapter 2", page_path, chapter_path)
+        assert result == {1}
+
+    def test_get_allowlist_intersection(self, tmp_path):
+        """When both page and chapter constraints exist, return the intersection."""
+        metas = [
+            _make_meta_with_location(0, [10], 1),  # chapter 1, page 10
+            _make_meta_with_location(1, [10], 2),  # chapter 2, page 10
+            _make_meta_with_location(2, [20], 2),  # chapter 2, page 20
+        ]
+        page_path    = str(tmp_path / "idx_page.db")
+        chapter_path = str(tmp_path / "idx_chapter.db")
+        build_secondary_indexes(metas, page_path, chapter_path)
+        # "page 10 in chapter 2" → intersection of {0,1} and {1,2} = {1}
+        result = get_chunk_allowlist("What is on page 10 in chapter 2?", page_path, chapter_path)
+        assert result == {1}

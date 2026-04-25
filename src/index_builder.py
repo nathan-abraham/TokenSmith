@@ -20,7 +20,7 @@ from src.embedder import SentenceTransformer
 
 from src.preprocessing.chunking import DocumentChunker, ChunkConfig
 from src.preprocessing.extraction import extract_sections_from_markdown
-from src.bptree import build_metadata_index
+from src.bptree import build_metadata_index, build_secondary_indexes
 
 # ----- runtime parallelism knobs (avoid oversubscription) -----
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -46,6 +46,8 @@ def build_index(
     use_multiprocessing: bool = False,
     use_headings: bool = False,
     bptree_path: Optional[str] = None,
+    page_index_path: Optional[str] = None,
+    chapter_index_path: Optional[str] = None,
 ) -> None:
     """
     Extract sections, chunk, embed, and build both FAISS and BM25 indexes.
@@ -233,6 +235,12 @@ def build_index(
         print(f"Building B+ tree metadata index ({len(metadata):,} records) ...")
         build_metadata_index(metadata, bptree_path)
         print(f"B+ tree index saved: {bptree_path}")
+
+    # Step 7: Build secondary B+ tree indexes for page and chapter filtering
+    if page_index_path is not None and chapter_index_path is not None:
+        print(f"Building secondary B+ tree indexes (page + chapter) ...")
+        build_secondary_indexes(metadata, page_index_path, chapter_index_path)
+        print(f"Secondary indexes saved: {page_index_path}, {chapter_index_path}")
 
 # ------------------------ Helper functions ------------------------------
 

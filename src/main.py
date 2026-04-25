@@ -75,6 +75,8 @@ def run_index_mode(args: argparse.Namespace, cfg: RAGConfig):
         use_multiprocessing=args.multiproc_indexing,
         use_headings=args.embed_with_headings,
         bptree_path=cfg.bptree_index_path if cfg.use_bptree else None,
+        page_index_path=cfg.page_index_path if cfg.use_bptree_filter else None,
+        chapter_index_path=cfg.chapter_index_path if cfg.use_bptree_filter else None,
     )
 
 def use_indexed_chunks(question: str, chunks: list) -> list:
@@ -136,8 +138,27 @@ def get_answer(
         # print(f"Retrieval query: {retrieval_query}")
         if cfg.use_hyde:
             retrieval_query = generate_hypothetical_document(question, cfg.gen_model, max_tokens=cfg.hyde_max_tokens)
-        
+
+        # Extract B+ tree allowlist when filtering is enabled.
+        allowlist = None
+        if cfg.use_bptree_filter:
+            try:
+                from src.query_filter import get_chunk_allowlist
+                allowlist = get_chunk_allowlist(
+                    retrieval_query,
+                    cfg.page_index_path,
+                    cfg.chapter_index_path,
+                )
+                if allowlist:
+                    print(f"B+ tree filter active: {len(allowlist)} chunks in allowlist")
+            except Exception as e:
+                print(f"Warning: B+ tree filter failed: {e}. Proceeding without filter.")
+
+        # Expand the candidate pool when filtering so post-filter still has enough hits.
         pool_n = max(cfg.num_candidates, cfg.top_k + 10)
+        if allowlist:
+            pool_n = len(chunks)
+
         raw_scores: Dict[str, Dict[int, float]] = {}
         for retriever in retrievers:
             # print(f"Getting scores from retriever: {retriever.name}...")
@@ -151,7 +172,7 @@ def get_answer(
         ordered, scores = ranker.rank(raw_scores=raw_scores)
         # print(f"Ordered candidate indices after ranking: {ordered[:cfg.top_k]}")
         # print(f"Corresponding scores: {scores[:cfg.top_k]}")
-        topk_idxs = filter_retrieved_chunks(cfg, chunks, ordered)
+        topk_idxs = filter_retrieved_chunks(cfg, chunks, ordered, allowlist)
         ranked_chunks = [chunks[i] for i in topk_idxs]
         # print(f"Top-{cfg.top_k} chunk indices after filtering: {topk_idxs}")
         # print("Len Ranked chunks:", len(ranked_chunks))

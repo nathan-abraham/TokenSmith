@@ -85,9 +85,11 @@ def get_page_numbers(chunk_indices: list[int], metadata: list[dict]) -> dict[int
 
 # -------------------------- Filtering logic -----------------------------
 
-def filter_retrieved_chunks(cfg: RAGConfig, chunks, ordered):
-    topk_idxs = ordered[:cfg.top_k]
-    return topk_idxs
+def filter_retrieved_chunks(cfg: RAGConfig, chunks, ordered, allowlist=None):
+    if allowlist is not None:
+        filtered = [i for i in ordered if i in allowlist]
+        return filtered[:cfg.top_k]
+    return ordered[:cfg.top_k]
 
 # -------------------------- Retrieval core ------------------------------
 
