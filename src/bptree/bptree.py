@@ -123,6 +123,36 @@ class BPlusTree:
                 return json.loads(meta_bytes.decode("utf-8"))
         return None
 
+    def range_scan(self, low_key: int, high_key: int) -> list:
+        """
+        Return all ``(key, value)`` pairs where ``low_key <= key <= high_key``.
+
+        Descends to the leaf that would contain *low_key*, then follows the
+        leaf-page chain until the first key that exceeds *high_key*.
+
+        Complexity: O(log N + M) where M is the number of matching records.
+        """
+        if self._root_id == -1:
+            return []
+
+        leaf_id = self._find_leaf(low_key)
+        results = []
+        while leaf_id != -1:
+            leaf = decode_leaf_page(self._read_page(leaf_id))
+            exceeded = False
+            for cid, meta_bytes in leaf["records"]:
+                if cid < low_key:
+                    continue
+                if cid > high_key:
+                    exceeded = True
+                    break
+                results.append((cid, json.loads(meta_bytes.decode("utf-8"))))
+            if exceeded:
+                break
+            leaf_id = leaf["next_id"]
+
+        return results
+
     def get_all_records(self) -> list:
         """
         Return all ``(chunk_id, metadata_dict)`` pairs in ascending key order
