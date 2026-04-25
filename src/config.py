@@ -58,6 +58,11 @@ class RAGConfig:
     use_bptree: bool = False
     bptree_index_path: str = "index/bptree/metadata.db"
 
+    # B+ tree secondary indexes + query filter (100% goal)
+    use_bptree_filter: bool = False
+    page_index_path: str = "index/bptree/idx_page.db"
+    chapter_index_path: str = "index/bptree/idx_chapter.db"
+
     # user feedback modeling
     enable_topic_extraction: bool = False
 
