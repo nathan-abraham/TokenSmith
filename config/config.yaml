@@ -20,6 +20,6 @@ max_history_turns: 3
 enable_topic_extraction: true
 use_bptree: true
 bptree_index_path: "index/bptree/metadata.db"
-use_bptree_filter: false
+use_bptree_filter: true
 page_index_path: "index/bptree/idx_page.db"
 chapter_index_path: "index/bptree/idx_chapter.db"
